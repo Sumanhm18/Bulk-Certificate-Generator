@@ -13,7 +13,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, ValidationError, field_validator
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, A4
@@ -171,6 +172,13 @@ def create_app(db_path=None, start_worker=True, renderer=render_certificate):
 
     api = FastAPI(title='Bulk Certificate Generator', lifespan=lifespan)
     api.state.store = store
+    static_dir = Path(__file__).parent / 'static'
+    api.mount('/static', StaticFiles(directory=static_dir), name='static')
+
+    @api.get('/', include_in_schema=False)
+    def frontend():
+        return FileResponse(static_dir / 'index.html')
+
 
     def require_job(db, job_id):
         row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
