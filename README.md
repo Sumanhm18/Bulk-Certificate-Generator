@@ -12,7 +12,7 @@ A failed recipient does not prevent other valid recipients from receiving certif
 - Job progress and paginated per-recipient results.
 - Individual PDF downloads and bulk ZIP archives with a results manifest.
 - Selective retry of generation failures, preserving successful certificates.
-- Browser dashboard with JSON import, live progress, pagination, and downloads.
+- Browser dashboard with JSON/CSV import, recent jobs, live progress, pagination, and downloads.
 - Interactive API documentation and automated tests.
 
 ## System architecture
@@ -205,19 +205,20 @@ DATABASE_PATH=./data/demo.sqlite3 uvicorn app.asgi:app --workers 1
 Open http://127.0.0.1:8000 after starting the application.
 
 1. Enter the course/event title, organization, and issue date.
-2. Paste a JSON array of recipients, select **Use sample**, or **Import JSON**. Import accepts a recipient array or a full request object like `examples/request.json` (up to 5 MB).
+2. Paste a JSON array of recipients, select **Use sample**, or **Import JSON / CSV**. JSON import accepts a recipient array or a full request object like `examples/request.json` (up to 5 MB).
 3. Select **Generate certificates**. The dashboard automatically polls progress once per second until completion.
 4. Review recipient outcomes and field errors, navigate result pages, and download individual PDFs or the complete ZIP.
 5. Use **Retry generation failures** after resolving a rendering problem. Validation errors need corrected data submitted as a new job; retrying a job with only validation failures returns an explanation.
 
 The job ID is stored in the page URL as `?job=<uuid>`, so refreshing the page resumes tracking. You can also paste an existing UUID into **Track your job**. Tracking errors pause updates; **Refresh** tries again. The browser does not store submitted recipient data in local storage.
 
-No Node.js, npm install, or frontend build step is needed. Frontend assets are included in the Python package. Layout adapts to mobile screens, with labeled form controls, progress indicators, and live notifications.
+No Node.js, npm install, or frontend build step is needed to run the application. Frontend assets are included in the Python package. Layout adapts to mobile screens, with labeled form controls, progress indicators, and live notifications.
 
 ## API reference
 
 | Method | Endpoint | Purpose | Successful response |
 | --- | --- | --- | --- |
+| `GET` | `/jobs` | List recent jobs with pagination | `200` JSON |
 | `POST` | `/jobs` | Submit a bulk generation request | `202` JSON |
 | `GET` | `/jobs/{job_id}` | Check status and progress | `200` JSON |
 | `GET` | `/jobs/{job_id}/certificates` | Retrieve paginated recipient results | `200` JSON |
@@ -377,9 +378,10 @@ Job creation and all recipient inserts happen in one transaction. Queue claiming
 python -m pytest -q
 ```
 
-The suite currently includes **17 tests** and uses isolated temporary databases. Coverage includes:
+The suite currently includes **19 Python tests** and **5 JavaScript CSV parser tests** and uses isolated temporary databases. Coverage includes:
 
-- Frontend HTML/static asset serving and preservation of API routes.
+- Frontend HTML/static asset serving, CSV template downloads, and preservation of API routes.
+- Job history ordering, pagination, summaries, and invalid query parameters.
 - Job acceptance and request validation.
 - Individual invalid-recipient isolation.
 - Generated PDF text and download headers.
@@ -390,7 +392,7 @@ The suite currently includes **17 tests** and uses isolated temporary databases.
 - ZIP contents, failure manifests, and manifest-only archives.
 - Selective retries that preserve successful certificates.
 
-The renderer is injectable, allowing tests to simulate failure without introducing test-only API fields. GitHub Actions is configured to run tests on Python 3.11 and 3.13 for pushes and pull requests.
+The renderer is injectable, allowing tests to simulate failure without introducing test-only API fields. GitHub Actions is configured to run the Python suite on Python 3.11 and 3.13 and the CSV parser tests with Node.js 22 for pushes and pull requests. Run the parser tests locally with `node --test tests/csv.test.cjs` (Node.js 18+; no npm dependencies).
 
 ## Project structure
 
@@ -403,9 +405,12 @@ Bulk-Certificate-Generator/
 │   └── static/
 │       ├── index.html          # Dashboard and forms
 │       ├── style.css           # Responsive layout
-│       └── app.js              # API integration and polling
+│       ├── app.js              # API integration, history, and polling
+│       ├── csv.js              # Recipient CSV parser
+│       └── recipients-template.csv # Downloadable import example
 ├── tests/
-│   └── test_api.py             # API, PDF, recovery, archive, and retry tests
+│   ├── test_api.py             # API, PDF, recovery, archive, retry, and history tests
+│   └── csv.test.cjs            # Dependency-free CSV parser tests
 ├── examples/
 │   └── request.json            # Ready-to-submit mixed-validity request
 ├── .github/workflows/
@@ -432,3 +437,19 @@ Before deploying as a shared service, add authorization, rate and body-size limi
 - **Change storage:** replace the relevant `Store` operations and download/archive reads.
 
 Existing databases require a migration when changing tables: `CREATE TABLE IF NOT EXISTS` does not update an existing schema.
+
+## CSV import and recent jobs
+
+Download the **CSV template** from the dashboard, or prepare a UTF-8 `.csv` file with exactly two columns, `name` and `email` (either order):
+
+```csv
+name,email
+Ada Lovelace,ada@example.com
+"Hopper, Grace",grace@example.com
+```
+
+The importer accepts a UTF-8 BOM, CRLF/LF line endings, quoted commas, escaped double quotes, and embedded newlines. Blank lines are skipped; recipient rows with empty fields are retained for backend validation. Invalid headers, column counts, or quoting produce an import error before submission. Files are limited to 5 MB and 10,000 recipients. Imported records populate the JSON editor for review; the backend remains the source of recipient validation. CSV files must be exported from spreadsheets; `.xlsx` is not supported.
+
+**Recent jobs** lists batches stored in the current database, newest first. Select **Open** to resume tracking, **Older / Newer** to navigate pages, and **Refresh jobs** to update the list. The list also refreshes after submission and when the tracked job finishes.
+
+The corresponding API is `GET /jobs?offset=0&limit=10`. It returns `offset`, `limit`, global job `total`, and `items` containing job metadata and each job's recipient `total`. The maximum limit is 100. A read snapshot keeps counts and entries consistent; results are ordered by creation timestamp and ID. Offset pages can shift when new jobs arrive, so this is a recent-history view, not a stable export. This installation has no authentication; the history is shared across all clients and is not a private per-user dashboard.

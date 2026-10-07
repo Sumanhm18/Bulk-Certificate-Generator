@@ -200,3 +200,30 @@ def test_frontend_and_static_assets_are_served(setup):
         assert asset.status_code == 200 and content_type in asset.headers['content-type']
     assert client.get('/static/missing.js').status_code == 404
     assert '/jobs' in client.get('/openapi.json').json()['paths']
+
+
+def test_job_history_is_paginated_newest_first(setup):
+    client, store = setup
+    assert client.get('/jobs').json() == {'offset': 0, 'limit': 10, 'total': 0, 'items': []}
+    first = client.post('/jobs', json=payload()).json()['id']
+    second = client.post('/jobs', json=payload([{}, {}])).json()['id']
+    with store.connect() as db:
+        db.execute("UPDATE jobs SET created_at='2026-01-01T00:00:00+00:00' WHERE id=?", (first,))
+        db.execute("UPDATE jobs SET created_at='2026-02-01T00:00:00+00:00' WHERE id=?", (second,))
+    recent = client.get('/jobs?limit=1').json()
+    assert recent['total'] == 2 and recent['items'][0]['id'] == second
+    assert recent['items'][0]['total'] == 2
+    assert 'pdf' not in recent['items'][0] and 'recipients' not in recent['items'][0]
+    assert client.get('/jobs?offset=1&limit=1').json()['items'][0]['id'] == first
+    assert client.get('/jobs?offset=2').json()['items'] == []
+    store.process_one(render_certificate)
+    assert client.get('/jobs?offset=1').json()['items'][0]['status'] == 'completed'
+    for query in ['limit=0', 'limit=101', 'offset=-1']:
+        assert client.get('/jobs?' + query).status_code == 422
+
+
+def test_csv_template_available(setup):
+    client, _ = setup
+    response = client.get('/static/recipients-template.csv')
+    assert response.status_code == 200
+    assert response.text.startswith('name,email\n')
