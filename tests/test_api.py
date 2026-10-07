@@ -116,3 +116,73 @@ def test_certificate_cannot_be_downloaded_under_another_job(setup):
     store.process_one(render_certificate)
     item = client.get(f'/jobs/{a}/certificates').json()['items'][0]
     assert client.get(f"/jobs/{b}/certificates/{item['id']}").status_code == 404
+
+
+def test_archive_contains_successful_pdfs_and_failure_manifest(setup):
+    import json
+    from zipfile import ZipFile
+
+    client, store = setup
+    job = client.post('/jobs', json=payload([{'name': 'Ada', 'email': 'ada@example.com'}, {}])).json()['id']
+    assert client.get(f'/jobs/{job}/archive').status_code == 409
+    store.process_one(render_certificate)
+    response = client.get(f'/jobs/{job}/archive')
+    assert response.status_code == 200
+    assert response.headers['content-type'] == 'application/zip'
+    assert int(response.headers['content-length']) == len(response.content)
+    with ZipFile(BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read('manifest.json'))
+        success, failure = manifest['certificates']
+        assert set(archive.namelist()) == {'manifest.json', success['filename']}
+        assert archive.read(success['filename']) == client.get(f"/jobs/{job}/certificates/{success['id']}").content
+        assert failure['status'] == 'failed' and failure['filename'] is None
+        assert manifest['job']['status'] == 'partial_failure'
+    assert client.get('/jobs/missing/archive').status_code == 404
+
+
+def test_retry_only_generation_failures_preserves_successes(setup):
+    client, store = setup
+    job = client.post('/jobs', json=payload([{'name': 'Fail', 'email': 'f@example.com'}, {'name': 'Pass', 'email': 'p@example.com'}, {}])).json()['id']
+    assert client.post(f'/jobs/{job}/retry').status_code == 409
+
+    def renderer(name, *args):
+        if name == 'Fail':
+            raise RuntimeError('temporary failure')
+        return render_certificate(name, *args)
+
+    store.process_one(renderer)
+    before = client.get(f'/jobs/{job}/certificates').json()['items']
+    pdf = client.get(before[1]['download_url']).content
+    response = client.post(f'/jobs/{job}/retry')
+    assert response.status_code == 202 and response.json()['retried'] == 1
+    assert client.post(f'/jobs/{job}/retry').status_code == 409
+    status = client.get(f'/jobs/{job}').json()
+    assert status['completed_at'] is None and status['pending'] == 1
+    generated = []
+
+    def recovered(name, *args):
+        generated.append(name)
+        return render_certificate(name, *args)
+
+    store.process_one(recovered)
+    assert generated == ['Fail']
+    assert client.get(before[1]['download_url']).content == pdf
+    after = client.get(f'/jobs/{job}/certificates').json()['items']
+    assert after[0]['id'] == before[0]['id'] and after[0]['error'] is None
+    assert after[2]['error'] == before[2]['error']
+    assert client.get(f'/jobs/{job}').json()['status'] == 'partial_failure'
+    assert client.post(f'/jobs/{job}/retry').status_code == 409
+    assert client.post('/jobs/missing/retry').status_code == 404
+
+
+def test_all_invalid_archive_is_manifest_only(setup):
+    import json
+    from zipfile import ZipFile
+
+    client, store = setup
+    job = client.post('/jobs', json=payload([{}])).json()['id']
+    store.process_one(render_certificate)
+    assert client.post(f'/jobs/{job}/retry').status_code == 409
+    with ZipFile(BytesIO(client.get(f'/jobs/{job}/archive').content)) as archive:
+        assert archive.namelist() == ['manifest.json']
+        assert json.loads(archive.read('manifest.json'))['certificates'][0]['error']

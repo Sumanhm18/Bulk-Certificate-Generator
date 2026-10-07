@@ -4,6 +4,8 @@ import logging
 import os
 import sqlite3
 import threading
+import tempfile
+from zipfile import ZipFile, ZIP_DEFLATED
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date, datetime, timezone
 from io import BytesIO
@@ -11,7 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, ValidationError, field_validator
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, A4
@@ -194,6 +196,7 @@ def create_app(db_path=None, start_worker=True, renderer=render_certificate):
     @api.get('/jobs/{job_id}')
     def job_status(job_id: str):
         with store.connect() as db:
+            db.execute('BEGIN')  # Keep job state and counts in one read snapshot.
             job = require_job(db, job_id)
             counts = dict(db.execute('SELECT status, COUNT(*) FROM certificates WHERE job_id=? GROUP BY status', (job_id,)).fetchall())
         total = sum(counts.values())
@@ -216,5 +219,60 @@ def create_app(db_path=None, start_worker=True, renderer=render_certificate):
         if row['status'] != 'succeeded':
             raise HTTPException(409, 'Certificate is not available')
         return Response(bytes(row['pdf']), media_type='application/pdf', headers={'Content-Disposition': f'attachment; filename="certificate-{certificate_id}.pdf"'})
+
+    @api.post('/jobs/{job_id}/retry', status_code=202)
+    def retry_failed(job_id: str):
+        with store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = require_job(db, job_id)
+            if job['status'] in ('queued', 'running'):
+                raise HTTPException(409, 'Wait for the job to finish before retrying')
+            # Validated rows have a name/email; invalid inputs need a new request.
+            count = db.execute(
+                "UPDATE certificates SET status='pending', error=NULL WHERE job_id=? "
+                "AND status='failed' AND name IS NOT NULL AND email IS NOT NULL",
+                (job_id,),
+            ).rowcount
+            if not count:
+                raise HTTPException(409, 'No generation failures available to retry')
+            db.execute("UPDATE jobs SET status='queued', completed_at=NULL WHERE id=?", (job_id,))
+        return {'id': job_id, 'status': 'queued', 'retried': count, 'status_url': f'/jobs/{job_id}'}
+
+    @api.get('/jobs/{job_id}/archive')
+    def archive(job_id: str):
+        # Disk-backed temporary storage avoids accumulating all PDFs in memory.
+        output = tempfile.TemporaryFile()
+        try:
+            with store.connect() as db:
+                db.execute('BEGIN')
+                job = require_job(db, job_id)
+                if job['status'] in ('queued', 'running'):
+                    raise HTTPException(409, 'Wait for the job to finish before downloading the archive')
+                manifest = []
+                with ZipFile(output, 'w', compression=ZIP_DEFLATED) as zipped:
+                    rows = db.execute('SELECT * FROM certificates WHERE job_id=? ORDER BY position', (job_id,))
+                    for row in rows:
+                        filename = f"certificate-{row['id']}.pdf" if row['status'] == 'succeeded' else None
+                        manifest.append({key: row[key] for key in ('id', 'position', 'name', 'email', 'status', 'error')} | {'filename': filename})
+                        if filename:
+                            zipped.writestr(filename, row['pdf'])
+                    zipped.writestr('manifest.json', json.dumps({'job': job, 'certificates': manifest}, indent=2))
+            length = output.tell()
+            output.seek(0)
+        except BaseException:
+            output.close()
+            raise
+
+        def chunks():
+            try:
+                while chunk := output.read(64 * 1024):
+                    yield chunk
+            finally:
+                output.close()
+
+        return StreamingResponse(chunks(), media_type='application/zip', headers={
+            'Content-Disposition': f'attachment; filename="certificates-{job["id"]}.zip"',
+            'Content-Length': str(length),
+        })
 
     return api
