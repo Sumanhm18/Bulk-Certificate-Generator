@@ -102,6 +102,7 @@ class Store:
                 id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id),
                 position INTEGER NOT NULL, name TEXT, email TEXT, status TEXT NOT NULL,
                 error TEXT, pdf BLOB, UNIQUE(job_id, position));
+            CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS certificates_job ON certificates(job_id, position);
             ''')
 
@@ -200,6 +201,18 @@ def create_app(db_path=None, start_worker=True, renderer=render_certificate):
                     error = json.dumps([{'field': '.'.join(map(str, e['loc'])), 'message': e['msg']} for e in exc.errors()])
                 db.execute('INSERT INTO certificates VALUES (?,?,?,?,?,?,?,NULL)', (str(uuid4()), job_id, position, name, email, status, error))
         return {'id': job_id, 'status': 'queued', 'status_url': f'/jobs/{job_id}', 'results_url': f'/jobs/{job_id}/certificates'}
+
+    @api.get('/jobs')
+    def list_jobs(offset: int = Query(0, ge=0), limit: int = Query(10, ge=1, le=100)):
+        with store.connect() as db:
+            db.execute('BEGIN')
+            total = db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]
+            rows = db.execute(
+                'SELECT j.*, (SELECT COUNT(*) FROM certificates c WHERE c.job_id=j.id) AS total '
+                'FROM jobs j ORDER BY j.created_at DESC, j.id DESC LIMIT ? OFFSET ?',
+                (limit, offset),
+            ).fetchall()
+        return {'offset': offset, 'limit': limit, 'total': total, 'items': [dict(row) for row in rows]}
 
     @api.get('/jobs/{job_id}')
     def job_status(job_id: str):

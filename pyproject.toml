@@ -18,4 +18,4 @@ include = ["app*"]
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-app = ["static/*.html", "static/*.css", "static/*.js"]
+app = ["static/*.html", "static/*.css", "static/*.js", "static/*.csv"]

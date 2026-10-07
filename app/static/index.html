@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Certify · Bulk Certificate Generator</title><link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Certify · Bulk Certificate Generator</title><link rel="stylesheet" href="/static/style.css"><script src="/static/csv.js" defer></script><script src="/static/app.js" defer></script></head>
 <body>
 <header><a class="brand" href="/">✦ <span>Certify</span></a><a href="/docs">API documentation ↗</a></header>
 <main>
@@ -12,9 +12,10 @@
 <label for="title">Course or event title</label><input id="title" name="title" maxlength="160" required placeholder="e.g. Python Fundamentals">
 <div class="fields"><div><label for="organization">Organization</label><input id="organization" maxlength="160" required placeholder="Learning Academy"></div><div><label for="issued-on">Issue date</label><input id="issued-on" type="date" required></div></div>
 <div class="label-row"><label for="recipients">Recipients <span id="recipient-count"></span></label><button type="button" class="text-button" id="sample">Use sample</button></div>
-<p class="hint" id="recipient-help">Paste a JSON array of objects with <code>name</code> and <code>email</code>, or import a JSON file.</p>
+<p class="hint" id="recipient-help">Paste a JSON array of objects with <code>name</code> and <code>email</code>, or import a JSON or CSV file.</p>
 <textarea id="recipients" rows="8" required spellcheck="false" aria-describedby="recipient-help" placeholder='[{"name": "Ada Lovelace", "email": "ada@example.com"}]'></textarea>
-<div class="upload-row"><label class="file-button" for="import-file">↑ Import JSON</label><input id="import-file" type="file" accept=".json,application/json"><span class="hint">Up to 10,000 recipients</span></div>
+<div class="upload-row"><label class="file-button" for="import-file">↑ Import JSON / CSV</label><input id="import-file" type="file" accept=".json,.csv,application/json,text/csv"><span class="hint">Up to 10,000 recipients</span></div>
+<p class="hint"><a href="/static/recipients-template.csv" download>Download CSV template ↓</a></p>
 <p class="hint">The template supports Latin-script text. Invalid recipient fields are reported individually.</p>
 <button id="submit" class="primary" type="submit">Generate certificates <span>→</span></button>
 </form></section>
@@ -29,5 +30,6 @@
 <p id="polling-label" class="hint"></p>
 <div class="results"><h3>Recipient results</h3><div class="table-wrap"><table><thead><tr><th scope="col">Recipient</th><th scope="col">Outcome</th><th scope="col">Certificate</th></tr></thead><tbody id="results-body"></tbody></table></div><div class="pagination"><button id="previous" class="secondary">← Previous</button><span id="page-label" class="hint"></span><button id="next" class="secondary">Next →</button></div></div>
 </div></section></div>
+<section class="card history"><div class="history-heading"><div><h2>Recent jobs</h2><p class="hint">Reopen a previous batch. All jobs in this installation are visible here.</p></div><button id="history-refresh" class="secondary">Refresh jobs</button></div><p id="history-message" class="hint" role="status"></p><div class="table-wrap"><table><thead><tr><th>Course / event</th><th>Created</th><th>Status</th><th>Recipients</th><th>Action</th></tr></thead><tbody id="history-body"></tbody></table></div><div class="pagination"><button id="history-previous" class="secondary">← Newer</button><span id="history-page" class="hint"></span><button id="history-next" class="secondary">Older →</button></div></section>
 <footer>Built for moments worth recognizing.<span>FastAPI · SQLite · PDF certificates</span></footer>
 </main></body></html>

@@ -35,8 +35,9 @@ $('sample').addEventListener('click', () => {
 $('import-file').addEventListener('change', async (event) => {
   const file = event.target.files[0]; if (!file) return;
   try {
-    if (file.size > 5 * 1024 * 1024) throw new Error('Choose a JSON file smaller than 5 MB.');
-    const data = JSON.parse(await file.text());
+    if (file.size > 5 * 1024 * 1024) throw new Error('Choose a JSON or CSV file smaller than 5 MB.');
+    const text = await file.text();
+    const data = file.name.toLowerCase().endsWith('.csv') ? parseCSVRecipients(text) : JSON.parse(text);
     const recipients = Array.isArray(data) ? data : data.recipients;
     if (!Array.isArray(recipients)) throw new Error('The file must contain a recipient array or a request object with recipients.');
     $('recipients').value = JSON.stringify(recipients, null, 2);
@@ -56,6 +57,7 @@ $('create-form').addEventListener('submit', async (event) => {
     const result = await api('/jobs', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:$('title').value,organization:$('organization').value,issued_on:$('issued-on').value,recipients:parseRecipients()})});
     notice('Job accepted. Certificates are being generated.');
     track(result.id);
+    loadHistory();
   } catch (error) { notice(error.message, true); }
   finally { $('submit').disabled = false; }
 });
@@ -107,6 +109,7 @@ async function refresh() {
     $('page-label').textContent=`${offset+1}–${offset+page.items.length} of ${job.total}`;
     $('previous').disabled=offset===0; $('next').disabled=offset+limit>=job.total;
     if (!done) timer=setTimeout(refresh,1000);
+    else loadHistory();
   } catch (error) {
     if (current === revision) { notice(error.message,true); $('polling-label').textContent='Updates paused. Select Refresh to try again.'; }
   } finally { if (current === revision) loading=false; }
@@ -123,4 +126,36 @@ $('retry').addEventListener('click', async () => {
   finally {if(current===revision) $('retry').disabled=false;}
 });
 const saved = new URL(location.href).searchParams.get('job');
+
+
+let historyOffset = 0, historyLoading = false;
+async function loadHistory() {
+  if (historyLoading) return;
+  historyLoading = true;
+  for (const id of ['history-previous','history-next','history-refresh']) $(id).disabled=true;
+  try {
+    const page = await api(`/jobs?offset=${historyOffset}&limit=10`);
+    $('history-body').replaceChildren();
+    for (const job of page.items) {
+      const row=document.createElement('tr');
+      const title=document.createElement('td'); title.textContent=job.title;
+      const org=document.createElement('small');org.textContent=job.organization;title.append(org);
+      const created=document.createElement('td'); created.textContent=new Date(job.created_at).toLocaleString();
+      const state=document.createElement('td');const badge=document.createElement('span');badge.className=`badge ${job.status}`;badge.textContent=job.status.replaceAll('_',' ');state.append(badge);
+      const total=document.createElement('td');total.textContent=job.total;
+      const action=document.createElement('td');const open=document.createElement('button');open.className='text-button';open.textContent='Open →';open.setAttribute('aria-label',`Open job ${job.title}`);open.addEventListener('click',()=>{track(job.id);$('lookup-form').scrollIntoView({behavior:'smooth',block:'center'});});action.append(open);
+      row.append(title,created,state,total,action);$('history-body').append(row);
+    }
+    $('history-message').textContent=page.total ? '' : 'No jobs yet. Create your first batch above.';
+    $('history-page').textContent=page.total ? `${historyOffset+1}–${historyOffset+page.items.length} of ${page.total}` : '0 jobs';
+    $('history-previous').disabled=historyOffset===0;
+    $('history-next').disabled=historyOffset+10>=page.total;
+  } catch(error) {$('history-message').textContent=`Could not load jobs: ${error.message}`;}
+  finally {historyLoading=false;$('history-refresh').disabled=false;}
+}
+$('history-refresh').addEventListener('click',loadHistory);
+$('history-previous').addEventListener('click',()=>{historyOffset=Math.max(0,historyOffset-10);loadHistory();});
+$('history-next').addEventListener('click',()=>{historyOffset+=10;loadHistory();});
+loadHistory();
+
 if (saved) track(saved);
