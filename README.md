@@ -1,6 +1,6 @@
 # Bulk Certificate Generator
 
-A Python backend that generates certificates for up to **10,000 recipients in a single request**. Built with **FastAPI**, **SQLite**, and **ReportLab**, it processes jobs in the background, tracks individual outcomes, and provides PDF and ZIP downloads.
+A Python backend that generates certificates for up to **10,000 recipients in a single request**. Includes a responsive browser frontend. Built with **FastAPI**, **SQLite**, and **ReportLab**, it processes jobs in the background, tracks individual outcomes, and provides PDF and ZIP downloads.
 
 A failed recipient does not prevent other valid recipients from receiving certificates.
 
@@ -12,13 +12,14 @@ A failed recipient does not prevent other valid recipients from receiving certif
 - Job progress and paginated per-recipient results.
 - Individual PDF downloads and bulk ZIP archives with a results manifest.
 - Selective retry of generation failures, preserving successful certificates.
+- Browser dashboard with JSON import, live progress, pagination, and downloads.
 - Interactive API documentation and automated tests.
 
 ## System architecture
 
 ```mermaid
 flowchart LR
-    Client[API client]
+    Client[Browser frontend or API client]
     subgraph Process[One Uvicorn application process]
         API[FastAPI routes]
         Validation[Pydantic validation]
@@ -45,6 +46,8 @@ flowchart LR
     Temp -->|Stream ZIP| Client
     API -->|JSON responses and PDF downloads| Client
 ```
+
+The frontend is plain HTML, CSS, and JavaScript served by FastAPI at `/`. It calls the API on the same origin, so no separate frontend server or CORS configuration is needed. Its optional Google Fonts styles fall back to system fonts if unavailable.
 
 The API and worker share a database, not an in-memory queue. SQLite stores job metadata, recipient results, and generated PDFs. A dedicated thread polls for queued jobs every 250 milliseconds when idle and processes one job at a time. No Redis, Celery, or external storage service is required.
 
@@ -179,7 +182,8 @@ On Windows, activate the environment with `.venv\Scripts\Activate.ps1` in PowerS
 uvicorn app.asgi:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-- API: http://127.0.0.1:8000
+- Frontend dashboard: http://127.0.0.1:8000
+- API endpoints: http://127.0.0.1:8000/jobs
 - Swagger UI: http://127.0.0.1:8000/docs
 - ReDoc: http://127.0.0.1:8000/redoc
 - OpenAPI schema: http://127.0.0.1:8000/openapi.json
@@ -195,6 +199,20 @@ Example with an alternative database location:
 ```bash
 DATABASE_PATH=./data/demo.sqlite3 uvicorn app.asgi:app --workers 1
 ```
+
+## Using the frontend
+
+Open http://127.0.0.1:8000 after starting the application.
+
+1. Enter the course/event title, organization, and issue date.
+2. Paste a JSON array of recipients, select **Use sample**, or **Import JSON**. Import accepts a recipient array or a full request object like `examples/request.json` (up to 5 MB).
+3. Select **Generate certificates**. The dashboard automatically polls progress once per second until completion.
+4. Review recipient outcomes and field errors, navigate result pages, and download individual PDFs or the complete ZIP.
+5. Use **Retry generation failures** after resolving a rendering problem. Validation errors need corrected data submitted as a new job; retrying a job with only validation failures returns an explanation.
+
+The job ID is stored in the page URL as `?job=<uuid>`, so refreshing the page resumes tracking. You can also paste an existing UUID into **Track your job**. Tracking errors pause updates; **Refresh** tries again. The browser does not store submitted recipient data in local storage.
+
+No Node.js, npm install, or frontend build step is needed. Frontend assets are included in the Python package. Layout adapts to mobile screens, with labeled form controls, progress indicators, and live notifications.
 
 ## API reference
 
@@ -359,8 +377,9 @@ Job creation and all recipient inserts happen in one transaction. Queue claiming
 python -m pytest -q
 ```
 
-The suite currently includes **16 tests** and uses isolated temporary databases. Coverage includes:
+The suite currently includes **17 tests** and uses isolated temporary databases. Coverage includes:
 
+- Frontend HTML/static asset serving and preservation of API routes.
 - Job acceptance and request validation.
 - Individual invalid-recipient isolation.
 - Generated PDF text and download headers.
@@ -380,7 +399,11 @@ Bulk-Certificate-Generator/
 ├── app/
 │   ├── __init__.py
 │   ├── asgi.py                 # Runnable FastAPI app
-│   └── main.py                 # Schemas, renderer, store, worker, API factory
+│   ├── main.py                 # Schemas, renderer, store, worker, API factory
+│   └── static/
+│       ├── index.html          # Dashboard and forms
+│       ├── style.css           # Responsive layout
+│       └── app.js              # API integration and polling
 ├── tests/
 │   └── test_api.py             # API, PDF, recovery, archive, and retry tests
 ├── examples/

@@ -186,3 +186,17 @@ def test_all_invalid_archive_is_manifest_only(setup):
     with ZipFile(BytesIO(client.get(f'/jobs/{job}/archive').content)) as archive:
         assert archive.namelist() == ['manifest.json']
         assert json.loads(archive.read('manifest.json'))['certificates'][0]['error']
+
+
+def test_frontend_and_static_assets_are_served(setup):
+    client, _ = setup
+    response = client.get('/')
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('text/html')
+    assert 'id="create-form"' in response.text
+    assert 'id="results-body"' in response.text
+    for path, content_type in [('/static/app.js', 'javascript'), ('/static/style.css', 'text/css')]:
+        asset = client.get(path)
+        assert asset.status_code == 200 and content_type in asset.headers['content-type']
+    assert client.get('/static/missing.js').status_code == 404
+    assert '/jobs' in client.get('/openapi.json').json()['paths']
